@@ -5,12 +5,20 @@ import random
 from time import time, sleep
 from pathlib import Path
 from psycopg.errors import QueryCanceled
+import argparse
+
+parser = argparse.ArgumentParser(prog="Bao")
+parser.add_argument("--duration", type=int, required=True)
+parser.add_argument("--port", type=str, required=True)
+parser.add_argument("--num-arms", type=int, required=True)
+parser.add_argument("--per-query-timeout", type=int, required=True)
+args = parser.parse_args()
 
 
 USE_BAO = True
-PG_CONNECTION_STR = "dbname=benchbase user=admin host=localhost port=5433"
+PG_CONNECTION_STR = f"dbname=benchbase user=admin host=localhost port={args.port}"
 QUERY_ORDER = "/home/wz2/mythril/queries/job_full/qorder.txt"
-DURATION_SEC = 8 * 3600
+DURATION_SEC = args.duration * 3600
 
 # https://stackoverflow.com/questions/312443/
 def chunks(lst, n):
@@ -25,8 +33,8 @@ def explain_queries(queries):
     cur.execute(f"SET enable_bao TO ON")
     cur.execute(f"SET enable_bao_selection TO OFF")
     cur.execute(f"SET enable_bao_rewards TO OFF")
-    cur.execute("SET bao_num_arms TO 49")
-    cur.execute("SET statement_timeout TO 30000")
+    cur.execute(f"SET bao_num_arms TO {args.num_arms}")
+    cur.execute(f"SET statement_timeout TO {args.per_query_timeout * 1000}")
 
     results = {}
     for (fp, q) in queries:
@@ -47,8 +55,8 @@ def run_query(sql, bao_select=False, bao_reward=False):
             cur.execute(f"SET enable_bao TO {bao_select or bao_reward}")
             cur.execute(f"SET enable_bao_selection TO {bao_select}")
             cur.execute(f"SET enable_bao_rewards TO {bao_reward}")
-            cur.execute("SET bao_num_arms TO 49")
-            cur.execute("SET statement_timeout TO 30000")
+            cur.execute(f"SET bao_num_arms TO {args.num_arms}")
+            cur.execute(f"SET statement_timeout TO {args.per_query_timeout * 1000}")
             cur.execute(q)
             cur.fetchall()
             conn.close()
