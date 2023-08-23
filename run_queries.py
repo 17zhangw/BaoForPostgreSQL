@@ -12,12 +12,17 @@ parser.add_argument("--duration", type=int, required=True)
 parser.add_argument("--port", type=str, required=True)
 parser.add_argument("--num-arms", type=int, required=True)
 parser.add_argument("--per-query-timeout", type=int, required=True)
+parser.add_argument("--qorder", type=str, default=None)
 args = parser.parse_args()
 
 
 USE_BAO = True
 PG_CONNECTION_STR = f"dbname=benchbase user=admin host=localhost port={args.port}"
-QUERY_ORDER = "/home/wz2/mythril/queries/job_full/qorder.txt"
+
+if args.qorder is not None:
+    QUERY_ORDER = args.qorder
+else:
+    QUERY_ORDER = "/home/wz2/mythril/queries/job_full/qorder.txt"
 DURATION_SEC = args.duration * 3600
 
 # https://stackoverflow.com/questions/312443/
