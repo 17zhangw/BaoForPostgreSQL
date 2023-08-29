@@ -68,7 +68,8 @@ def run_query(sql, bao_select=False, bao_reward=False):
             break
         except QueryCanceled:
             break
-        except:
+        except Exception as e:
+            print(e)
             sleep(1)
             continue
     stop = time()

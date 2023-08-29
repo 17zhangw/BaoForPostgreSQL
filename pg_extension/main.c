@@ -26,8 +26,6 @@ void _PG_fini(void);
 
 
 
-
-
 // Bao works by integrating with PostgreSQL's hook functionality.
 // 1) The bao_planner hook intercepts a query before the PG optimizer handles
 //    it, and communicates with the Bao server.
@@ -173,7 +171,9 @@ static PlannedStmt* bao_planner(Query *parse,
   // enable_bao_selection here, because if enable_bao is on, we still need
   // to attach a query plan to the query to record the reward later.
   if (!should_bao_optimize(parse) || !enable_bao) {
-    return standard_planner(parse, query_string, cursorOptions, boundParams);
+	to_return = standard_planner(parse, query_string, cursorOptions, boundParams);
+	to_return->queryId = 0;
+	return to_return;
   }
 
 
@@ -238,7 +238,7 @@ static void bao_ExecutorEnd(QueryDesc *queryDesc) {
   char* r_json;
   int conn_fd;
 
-  if (MyBackendType != B_BACKEND) {
+  if (MyBackendType != B_BACKEND || !enable_bao) {
 	  if (prev_ExecutorEnd) {
 		  prev_ExecutorEnd(queryDesc);
 	  } else {
@@ -306,6 +306,7 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
   char* hint_text;
   bool old_selection_val;
   bool connected = false;
+  bool skip = !enable_bao || !should_bao_optimize(query);
 
   
   // If there are no other EXPLAIN hooks, add to the EXPLAIN output Bao's estimate
@@ -329,8 +330,15 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
           : standard_planner(query, queryString, cursorOptions, params));
   INSTR_TIME_SET_CURRENT(plan_duration);
   INSTR_TIME_SUBTRACT(plan_duration, plan_start);
-    
-  if (!enable_bao) {
+
+  if (skip) {
+	// Open a new explain group called "Bao" and add our prediction into it.
+	ExplainOpenGroup("BaoProps", NULL, true, es);
+	ExplainOpenGroup("Bao", "Bao", true, es);
+	ExplainPropertyText("Bao recommended hint", "(no hint)", es);
+	ExplainCloseGroup("Bao", "Bao", true, es);
+	ExplainCloseGroup("BaoProps", NULL, true, es);
+
     // Bao is disabled, do the deault explain thing.
     ExplainOnePlan(plan, into, es, queryString, params, queryEnv, &plan_duration, NULL);
     return;
