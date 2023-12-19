@@ -17,6 +17,9 @@
 #include "utils/guc.h"
 #include "commands/explain.h"
 #include "tcop/tcopprot.h"
+#include "access/xact.h"
+#include "commands/createas.h"
+#include "storage/proc.h"
 
 
 
@@ -24,6 +27,15 @@ PG_MODULE_MAGIC;
 void _PG_init(void);
 void _PG_fini(void);
 
+static double
+elapsed_time(instr_time *starttime)
+{
+	instr_time	endtime;
+
+	INSTR_TIME_SET_CURRENT(endtime);
+	INSTR_TIME_SUBTRACT(endtime, *starttime);
+	return INSTR_TIME_GET_DOUBLE(endtime);
+}
 
 
 // Bao works by integrating with PostgreSQL's hook functionality.
@@ -230,23 +242,10 @@ static void bao_ExecutorStart(QueryDesc *queryDesc, int eflags) {
 
 }
 
-static void bao_ExecutorEnd(QueryDesc *queryDesc) {
-  // A query has finished. We need to check if it was a query Bao could optimize,
-  // and if so, report the reward to the Bao server.
-  
+static void bao_SendReward(QueryDesc *queryDesc, bool timeout) {
   BaoQueryInfo* bao_query_info;
   char* r_json;
   int conn_fd;
-
-  if (MyBackendType != B_BACKEND || !enable_bao) {
-	  if (prev_ExecutorEnd) {
-		  prev_ExecutorEnd(queryDesc);
-	  } else {
-		  standard_ExecutorEnd(queryDesc);
-	  }
-
-	  return;
-  }
 
   if (enable_bao_rewards && should_report_reward(queryDesc)) {
     // We are tracking rewards for queries, and this query was
@@ -265,8 +264,14 @@ static void bao_ExecutorEnd(QueryDesc *queryDesc) {
     // Finalize the instrumentation so we can read the final time.
     InstrEndLoop(queryDesc->totaltime);
 
-    // Generate a JSON blob with our reward.
-    r_json = reward_json(queryDesc->totaltime->total * 1000.0);
+    if (timeout) {
+	    r_json = reward_json(StatementTimeout);
+    }
+    else
+    {
+	    // Generate a JSON blob with our reward.
+	    r_json = reward_json(queryDesc->totaltime->total * 1000.0);
+    }
 
     // Extract the BaoQueryInfo, which we hid inside the queryId of the
     // PlannedStmt. `should_report_reward` ensures it is set.
@@ -284,12 +289,202 @@ static void bao_ExecutorEnd(QueryDesc *queryDesc) {
 
     free_bao_query_info(bao_query_info);
   }
+}
+
+static void bao_ExecutorEnd(QueryDesc *queryDesc) {
+  // A query has finished. We need to check if it was a query Bao could optimize,
+  // and if so, report the reward to the Bao server.
+  
+  if (MyBackendType != B_BACKEND || !enable_bao) {
+	  if (prev_ExecutorEnd) {
+		  prev_ExecutorEnd(queryDesc);
+	  } else {
+		  standard_ExecutorEnd(queryDesc);
+	  }
+
+	  return;
+  }
+
+  bao_SendReward(queryDesc, false);
   
   if (prev_ExecutorEnd) {
     prev_ExecutorEnd(queryDesc);
   } else {
     standard_ExecutorEnd(queryDesc);
   }
+}
+
+void
+static bao_ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
+			   const char *queryString, ParamListInfo params,
+			   QueryEnvironment *queryEnv, const instr_time *planduration,
+			   const BufferUsage *bufusage)
+{
+	DestReceiver *dest;
+	QueryDesc  *queryDesc;
+	instr_time	starttime;
+	double		totaltime = 0;
+	int			eflags;
+	int			instrument_option = 0;
+
+	Assert(plannedstmt->commandType != CMD_UTILITY);
+
+	if (es->analyze && es->timing)
+		instrument_option |= INSTRUMENT_TIMER;
+	else if (es->analyze)
+		instrument_option |= INSTRUMENT_ROWS;
+
+	if (es->buffers)
+		instrument_option |= INSTRUMENT_BUFFERS;
+	if (es->wal)
+		instrument_option |= INSTRUMENT_WAL;
+
+	/*
+	 * We always collect timing for the entire statement, even when node-level
+	 * timing is off, so we don't look at es->timing here.  (We could skip
+	 * this if !es->summary, but it's hardly worth the complication.)
+	 */
+	INSTR_TIME_SET_CURRENT(starttime);
+
+	/*
+	 * Use a snapshot with an updated command ID to ensure this query sees
+	 * results of any previously executed queries.
+	 */
+	PushCopiedSnapshot(GetActiveSnapshot());
+	UpdateActiveSnapshotCommandId();
+
+	/*
+	 * Normally we discard the query's output, but if explaining CREATE TABLE
+	 * AS, we'd better use the appropriate tuple receiver.
+	 */
+	if (into)
+		dest = CreateIntoRelDestReceiver(into);
+	else
+		dest = None_Receiver;
+
+	/* Create a QueryDesc for the query */
+	queryDesc = CreateQueryDesc(plannedstmt, queryString,
+								GetActiveSnapshot(), InvalidSnapshot,
+								dest, params, queryEnv, instrument_option);
+
+	/* Select execution options */
+	if (es->analyze)
+		eflags = 0;				/* default run-to-completion flags */
+	else
+		eflags = EXEC_FLAG_EXPLAIN_ONLY;
+	if (into)
+		eflags |= GetIntoRelEFlags(into);
+
+	/* call ExecutorStart to prepare the plan for execution */
+	ExecutorStart(queryDesc, eflags);
+
+	/* Execute the plan for statistics if asked for */
+	if (es->analyze)
+	{
+		ScanDirection dir;
+		MemoryContext ccxt = CurrentMemoryContext;
+
+		/* EXPLAIN ANALYZE CREATE TABLE AS WITH NO DATA is weird */
+		if (into && into->skipData)
+			dir = NoMovementScanDirection;
+		else
+			dir = ForwardScanDirection;
+
+		PG_TRY();
+		{
+			/* run the plan */
+			ExecutorRun(queryDesc, dir, 0L, true);
+		}
+		PG_CATCH();
+		{
+			MemoryContext ecxt = MemoryContextSwitchTo(ccxt);
+			ErrorData  *errdata = CopyErrorData();
+			if (errdata->sqlerrcode == ERRCODE_QUERY_CANCELED) {
+				bao_SendReward(queryDesc, true);
+			}
+
+			MemoryContextSwitchTo(ecxt);
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+
+		/* run cleanup too */
+		ExecutorFinish(queryDesc);
+
+		/* We can't run ExecutorEnd 'till we're done printing the stats... */
+		totaltime += elapsed_time(&starttime);
+	}
+
+	ExplainOpenGroup("Query", NULL, true, es);
+
+	/* Create textual dump of plan tree */
+	ExplainPrintPlan(es, queryDesc);
+
+	/*
+	 * COMPUTE_QUERY_ID_REGRESS means COMPUTE_QUERY_ID_AUTO, but we don't show
+	 * the queryid in any of the EXPLAIN plans to keep stable the results
+	 * generated by regression test suites.
+	 */
+	if (es->verbose && plannedstmt->queryId != UINT64CONST(0) &&
+		compute_query_id != COMPUTE_QUERY_ID_REGRESS)
+	{
+		/*
+		 * Output the queryid as an int64 rather than a uint64 so we match
+		 * what would be seen in the BIGINT pg_stat_statements.queryid column.
+		 */
+		ExplainPropertyInteger("Query Identifier", NULL, (int64)
+							   plannedstmt->queryId, es);
+	}
+
+	if (es->summary && planduration)
+	{
+		double		plantime = INSTR_TIME_GET_DOUBLE(*planduration);
+
+		ExplainPropertyFloat("Planning Time", "ms", 1000.0 * plantime, 3, es);
+	}
+
+	/* Print info about runtime of triggers */
+	if (es->analyze)
+		ExplainPrintTriggers(es, queryDesc);
+
+	/*
+	 * Print info about JITing. Tied to es->costs because we don't want to
+	 * display this in regression tests, as it'd cause output differences
+	 * depending on build options.  Might want to separate that out from COSTS
+	 * at a later stage.
+	 */
+	if (es->costs)
+		ExplainPrintJITSummary(es, queryDesc);
+
+	/*
+	 * Close down the query and free resources.  Include time for this in the
+	 * total execution time (although it should be pretty minimal).
+	 */
+	INSTR_TIME_SET_CURRENT(starttime);
+
+	ExecutorEnd(queryDesc);
+
+	FreeQueryDesc(queryDesc);
+
+	PopActiveSnapshot();
+
+	/* We need a CCI just in case query expanded to multiple plans */
+	if (es->analyze)
+		CommandCounterIncrement();
+
+	totaltime += elapsed_time(&starttime);
+
+	/*
+	 * We only report execution time if we actually ran the query (that is,
+	 * the user specified ANALYZE), and if summary reporting is enabled (the
+	 * user can set SUMMARY OFF to not have the timing information included in
+	 * the output).  By default, ANALYZE sets SUMMARY to true.
+	 */
+	if (es->summary && es->analyze)
+		ExplainPropertyFloat("Execution Time", "ms", 1000.0 * totaltime, 3,
+							 es);
+
+	ExplainCloseGroup("Query", NULL, true, es);
 }
 
 static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* into,
@@ -413,5 +608,5 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
   ExplainCloseGroup("BaoProps", NULL, true, es);
   
   // Do the deault explain thing.
-  ExplainOnePlan(plan, into, es, queryString, params, queryEnv, &plan_duration, NULL);
+  bao_ExplainOnePlan(plan, into, es, queryString, params, queryEnv, &plan_duration, NULL);
 }

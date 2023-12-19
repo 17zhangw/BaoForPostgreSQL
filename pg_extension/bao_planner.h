@@ -387,6 +387,10 @@ static const char* node_type_to_string(NodeTag tag) {
     return "Merge Join";
   case T_HashJoin:
     return "Hash Join";
+  case T_CteScan:
+    return "CTEScan";
+  case T_Append:
+    return "Append";
   default:
     return "Other";
   }
@@ -441,6 +445,9 @@ static BaoPlanNode* transform_plan(PlannedStmt* stmt, Plan* node) {
   result->right = NULL;
   if (node->lefttree) result->left = transform_plan(stmt, node->lefttree);
   if (node->righttree) result->right = transform_plan(stmt, node->righttree);
+
+  if (node->type == T_SubqueryScan && ((SubqueryScan*)node)->subplan)
+	  result->left = transform_plan(stmt, ((SubqueryScan*)node)->subplan);
 
   return result;
 }

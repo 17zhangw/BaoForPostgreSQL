@@ -2,7 +2,8 @@ import numpy as np
 
 JOIN_TYPES = ["Nested Loop", "Hash Join", "Merge Join"]
 LEAF_TYPES = ["Seq Scan", "Index Scan", "Index Only Scan", "Bitmap Index Scan"]
-ALL_TYPES = JOIN_TYPES + LEAF_TYPES
+AUX_TYPES = ["CTEScan", "Append"]
+ALL_TYPES = JOIN_TYPES + LEAF_TYPES + AUX_TYPES
 
 
 class TreeBuilderError(Exception):
@@ -67,6 +68,11 @@ class TreeBuilder:
         if is_scan(plan):
             assert not children
             return self.__featurize_scan(plan)
+
+        if plan["Node Type"] in AUX_TYPES:
+            arr = np.zeros(len(ALL_TYPES))
+            arr[ALL_TYPES.index(node["Node Type"])] = 1
+            return (np.concatenate((arr, self.__stats(plan))), "")
 
         raise TreeBuilderError("Node wasn't transparent, a join, or a scan: " + str(plan))
 

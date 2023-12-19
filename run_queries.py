@@ -35,6 +35,7 @@ def chunks(lst, n):
 def explain_queries(queries):
     conn = psycopg.connect(PG_CONNECTION_STR)
     cur = conn.cursor()
+    cur.execute("SET bao_port = 9381")
     cur.execute(f"SET enable_bao TO ON")
     cur.execute(f"SET enable_bao_selection TO OFF")
     cur.execute(f"SET enable_bao_rewards TO OFF")
@@ -53,16 +54,26 @@ def explain_queries(queries):
 
 def run_query(sql, bao_select=False, bao_reward=False):
     start = time()
+    hint = None
     while True:
         try:
             conn = psycopg.connect(PG_CONNECTION_STR)
             cur = conn.cursor()
+            cur.execute("SET bao_port = 9381")
             cur.execute(f"SET enable_bao TO {bao_select or bao_reward}")
             cur.execute(f"SET enable_bao_selection TO {bao_select}")
             cur.execute(f"SET enable_bao_rewards TO {bao_reward}")
             cur.execute(f"SET bao_num_arms TO {args.num_arms}")
             cur.execute(f"SET statement_timeout TO {args.per_query_timeout * 1000}")
-            cur.execute(q)
+
+            exp = "EXPLAIN (ANALYZE, TIMING OFF) " + sql
+            rs = [r for r in cur.execute(exp)]
+            found = False
+            for (line,) in rs:
+                if "Bao recommended hint: " in line:
+                    hint = line.split("Bao recommended hint: ")[-1]
+                    found = True
+            assert found, print(rs)
             cur.fetchall()
             conn.close()
             break
@@ -73,7 +84,7 @@ def run_query(sql, bao_select=False, bao_reward=False):
             sleep(1)
             continue
     stop = time()
-    return stop - start
+    return stop - start, hint
 
 queries = []
 with open(QUERY_ORDER, "r") as f:
@@ -88,28 +99,24 @@ print("Using Bao:", USE_BAO)
 
 print("Executing queries using PG optimizer for initial training")
 for q_idx, (fp, q) in enumerate(queries):
-    pg_time = run_query(q, bao_reward=True)
+    pg_time, _ = run_query(q, bao_reward=True)
     print("x", q_idx, time(), fp, pg_time, "PG", flush=True)
 
 
-start_time = 0
-cur_time = 0
+start_time = time()
 next_time = start_time + 3600 * 0.25
 c_idx = 0
-while cur_time - start_time < DURATION_SEC:
+while time() - start_time < DURATION_SEC:
     delta_start = time()
     if USE_BAO:
         os.system("cd bao_server && python3 baoctl.py --retrain")
         os.system("sync")
 
     for q_idx, (fp, q) in enumerate(queries):
-        q_time = run_query(q, bao_reward=USE_BAO, bao_select=USE_BAO)
-        print(c_idx, q_idx, time(), fp, q_time, flush=True)
+        q_time, hint = run_query(q, bao_reward=USE_BAO, bao_select=USE_BAO)
+        print(c_idx, q_idx, time(), fp, q_time, hint, flush=True)
 
-    # Only track this time.
-    cur_time += (time() - delta_start)
-
-    if cur_time - start_time >= next_time:
+    if time() - start_time >= next_time:
         print("CHECKING CONFIG", flush=True)
         print(explain_queries(queries), flush=True)
         next_time += 3600 * 0.25
