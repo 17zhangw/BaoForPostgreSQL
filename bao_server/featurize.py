@@ -71,7 +71,7 @@ class TreeBuilder:
 
         if plan["Node Type"] in AUX_TYPES:
             arr = np.zeros(len(ALL_TYPES))
-            arr[ALL_TYPES.index(node["Node Type"])] = 1
+            arr[ALL_TYPES.index(plan["Node Type"])] = 1
             return (np.concatenate((arr, self.__stats(plan))), "")
 
         raise TreeBuilderError("Node wasn't transparent, a join, or a scan: " + str(plan))
