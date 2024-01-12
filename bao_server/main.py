@@ -149,6 +149,14 @@ if __name__ == "__main__":
     port = int(config["Port"])
     listen_on = config["ListenOn"]
 
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    result = sock.connect_ex((listen_on, port))
+    if result == 0:
+        # Don't double-load
+        exit
+    sock.close()
+
     print(f"Listening on {listen_on} port {port}")
     
     server = Process(target=start_server, args=[listen_on, port])
