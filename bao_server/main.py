@@ -1,3 +1,4 @@
+import argparse
 import socketserver
 import json
 import struct
@@ -9,9 +10,7 @@ import model
 import train
 import baoctl
 import math
-import reg_blocker
-from constants import (PG_OPTIMIZER_INDEX, DEFAULT_MODEL_PATH,
-                       OLD_MODEL_PATH, TMP_MODEL_PATH)
+from constants import (PG_OPTIMIZER_INDEX)
 
 def add_buffer_info_to_plans(buffer_info, plans):
     for p in plans:
@@ -60,18 +59,18 @@ class BaoModel:
             new_model = model.BaoRegression(have_cache_data=True)
             new_model.load(fp)
 
-            if reg_blocker.should_replace_model(
-                    self.__current_model,
-                    new_model):
-                self.__current_model = new_model
-                print("Accepted new model.")
-            else:
-                print("Rejecting load of new model due to regresison profile.")
-                
+            self.__current_model = new_model
+            print("Accepted new model.")
+
         except Exception as e:
             print("Failed to load Bao model from", fp,
                   "Exception:", sys.exc_info()[0])
             raise e
+
+    def clear_model(self, bao_db):
+        self.__current_model = None
+        storage.clear_experience(bao_db)
+        print("Cleared model.")
             
 
 class JSONTCPHandler(socketserver.BaseRequestHandler):
@@ -113,12 +112,15 @@ class BaoJSONHandler(JSONTCPHandler):
                 self.request.sendall(struct.pack("d", result))
                 self.request.close()
             elif message_type == "reward":
-                plan, buffers, obs_reward = self.__messages
+                plan, buffers, obs_reward, bao_db = self.__messages
                 plan = add_buffer_info_to_plans(buffers, [plan])[0]
-                storage.record_reward(plan, obs_reward["reward"], obs_reward["pid"])
+                storage.record_reward(bao_db["bao_db"], plan, obs_reward["reward"], obs_reward["pid"])
             elif message_type == "load model":
                 path = self.__messages[0]["path"]
                 self.server.bao_model.load_model(path)
+            elif message_type == "clear model":
+                bao_db = self.__messages[0]["bao_db"]
+                self.server.bao_model.clear_model(bao_db)
             else:
                 print("Unknown message type:", message_type)
             
@@ -131,9 +133,9 @@ class BaoJSONHandler(JSONTCPHandler):
 def start_server(listen_on, port):
     model = BaoModel()
 
-    if os.path.exists(DEFAULT_MODEL_PATH):
-        print("Loading existing model")
-        model.load_model(DEFAULT_MODEL_PATH)
+    #if os.path.exists(DEFAULT_MODEL_PATH):
+    #    print("Loading existing model")
+    #    model.load_model(DEFAULT_MODEL_PATH)
     
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer((listen_on, port), BaoJSONHandler) as server:
@@ -143,11 +145,13 @@ def start_server(listen_on, port):
 
 if __name__ == "__main__":
     from multiprocessing import Process
-    from config import read_config
 
-    config = read_config()
-    port = int(config["Port"])
-    listen_on = config["ListenOn"]
+    parser = argparse.ArgumentParser(prog="Process")
+    parser.add_argument("--port", type=int, required=True)
+    args = parser.parse_args()
+
+    port = int(args.port)
+    listen_on = "localhost"
 
     import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

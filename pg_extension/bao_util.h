@@ -100,6 +100,15 @@ static bool starts_with(const char *str, const char *pre) {
   return strncmp(pre, str, strlen(pre)) == 0;
 }
 
+static char* bao_db_json() {
+  char* buf;
+  size_t json_size;
+  FILE* stream = open_memstream(&buf, &json_size);
+  fprintf(stream, "{\"bao_db\": \"%s\"}\n", bao_db);
+  fclose(stream);
+  return buf;
+}
+
 // Create a JSON object containing the reward, suitable to send to the Bao
 // server.
 static char* reward_json(double reward) {

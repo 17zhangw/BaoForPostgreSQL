@@ -12,6 +12,7 @@ static bool enable_bao = false;
 static bool enable_bao_rewards = false;
 static bool enable_bao_selection = false;
 static char* bao_host = NULL;
+static char* bao_db = "bao.db";
 static int bao_port = 9381;
 // static int bao_num_arms = 5;
 static int bao_num_arms = 49;

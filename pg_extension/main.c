@@ -118,6 +118,15 @@ void _PG_init(void) {
     0,
     NULL, NULL, NULL);
 
+  DefineCustomStringVariable(
+    "bao_db",
+    "Bao DB", NULL,
+    &bao_db,
+    "bao.db",
+    PGC_USERSET,
+    0,
+    NULL, NULL, NULL);
+
   DefineCustomIntVariable(
     "bao_port",
     "Bao server port", NULL,
@@ -284,6 +293,7 @@ static void bao_SendReward(QueryDesc *queryDesc, bool timeout) {
     write_all_to_socket(conn_fd, bao_query_info->plan_json);
     write_all_to_socket(conn_fd, bao_query_info->buffer_json);
     write_all_to_socket(conn_fd, r_json);
+    write_all_to_socket(conn_fd, bao_db_json());
     write_all_to_socket(conn_fd, TERMINAL_MESSAGE);
     shutdown(conn_fd, SHUT_RDWR);
 

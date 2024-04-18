@@ -10,6 +10,7 @@ import argparse
 parser = argparse.ArgumentParser(prog="Bao")
 parser.add_argument("--duration", type=int, required=True)
 parser.add_argument("--port", type=str, required=True)
+parser.add_argument("--bao-port", type=str, required=True)
 parser.add_argument("--num-arms", type=int, required=True)
 parser.add_argument("--per-query-timeout", type=int, required=True)
 parser.add_argument("--qorder", type=str, default=None)
@@ -35,7 +36,7 @@ def chunks(lst, n):
 def explain_queries(queries):
     conn = psycopg.connect(PG_CONNECTION_STR)
     cur = conn.cursor()
-    cur.execute("SET bao_port = 9381")
+    cur.execute(f"SET bao_port = {args.bao_port}")
     cur.execute(f"SET enable_bao TO ON")
     cur.execute(f"SET enable_bao_selection TO OFF")
     cur.execute(f"SET enable_bao_rewards TO OFF")
@@ -59,7 +60,7 @@ def run_query(sql, bao_select=False, bao_reward=False):
         try:
             conn = psycopg.connect(PG_CONNECTION_STR)
             cur = conn.cursor()
-            cur.execute("SET bao_port = 9381")
+            cur.execute(f"SET bao_port = {args.bao_port}")
             cur.execute(f"SET enable_bao TO {bao_select or bao_reward}")
             cur.execute(f"SET enable_bao_selection TO {bao_select}")
             cur.execute(f"SET enable_bao_rewards TO {bao_reward}")
