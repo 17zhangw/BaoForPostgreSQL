@@ -2,7 +2,7 @@ import numpy as np
 
 JOIN_TYPES = ["Nested Loop", "Hash Join", "Merge Join"]
 LEAF_TYPES = ["Seq Scan", "Index Scan", "Index Only Scan", "Bitmap Index Scan"]
-AUX_TYPES = ["CTEScan", "Append"]
+AUX_TYPES = ["CTEScan", "Append", "BitmapAnd", "BitmapOr"]
 ALL_TYPES = JOIN_TYPES + LEAF_TYPES + AUX_TYPES
 
 

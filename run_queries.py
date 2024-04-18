@@ -14,6 +14,7 @@ parser.add_argument("--bao-port", type=str, required=True)
 parser.add_argument("--num-arms", type=int, required=True)
 parser.add_argument("--per-query-timeout", type=int, required=True)
 parser.add_argument("--qorder", type=str, default=None)
+parser.add_argument("--bao-db", type=str, required=True)
 args = parser.parse_args()
 
 
@@ -37,6 +38,7 @@ def explain_queries(queries):
     conn = psycopg.connect(PG_CONNECTION_STR)
     cur = conn.cursor()
     cur.execute(f"SET bao_port = {args.bao_port}")
+    cur.execute(f"SET bao_db = \"{args.bao_db}\"")
     cur.execute(f"SET enable_bao TO ON")
     cur.execute(f"SET enable_bao_selection TO OFF")
     cur.execute(f"SET enable_bao_rewards TO OFF")
@@ -61,6 +63,7 @@ def run_query(sql, bao_select=False, bao_reward=False):
             conn = psycopg.connect(PG_CONNECTION_STR)
             cur = conn.cursor()
             cur.execute(f"SET bao_port = {args.bao_port}")
+            cur.execute(f"SET bao_db = \"{args.bao_db}\"")
             cur.execute(f"SET enable_bao TO {bao_select or bao_reward}")
             cur.execute(f"SET enable_bao_selection TO {bao_select}")
             cur.execute(f"SET enable_bao_rewards TO {bao_reward}")
@@ -103,6 +106,10 @@ for q_idx, (fp, q) in enumerate(queries):
     pg_time, _ = run_query(q, bao_reward=True)
     print("x", q_idx, time(), fp, pg_time, "PG", flush=True)
 
+retrain_cmd = f"cd bao_server && python3 baoctl.py --retrain --port {args.bao_port} --bao-db {args.bao_db} "
+retrain_cmd += f"--bao-model-path {args.bao_port}_model "
+retrain_cmd += f"--bao-old-model-path {args.bao_port}_old_model "
+retrain_cmd += f"--bao-tmp-model-path {args.bao_port}_tmp_model "
 
 start_time = time()
 next_time = start_time + 3600 * 0.25
@@ -110,7 +117,7 @@ c_idx = 0
 while time() - start_time < DURATION_SEC:
     delta_start = time()
     if USE_BAO:
-        os.system("cd bao_server && python3 baoctl.py --retrain")
+        os.system(retrain_cmd)
         os.system("sync")
 
     for q_idx, (fp, q) in enumerate(queries):

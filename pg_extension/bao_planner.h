@@ -391,6 +391,10 @@ static const char* node_type_to_string(NodeTag tag) {
     return "CTEScan";
   case T_Append:
     return "Append";
+  case T_BitmapAnd:
+	return "BitmapAnd";
+  case T_BitmapOr:
+	return "BitmapOr";
   default:
     return "Other";
   }

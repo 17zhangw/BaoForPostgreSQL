@@ -158,11 +158,10 @@ if __name__ == "__main__":
     result = sock.connect_ex((listen_on, port))
     if result == 0:
         # Don't double-load
-        exit
+        exit(0)
     sock.close()
 
     print(f"Listening on {listen_on} port {port}")
-    
     server = Process(target=start_server, args=[listen_on, port])
     
     print("Spawning server process...")
